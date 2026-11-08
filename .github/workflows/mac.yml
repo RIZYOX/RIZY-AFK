@@ -1,0 +1,49 @@
+# Builds the macOS app (Apple Silicon and Intel) for a release of RIZYOX/RIZY-AFK.
+# Started by `npm run release` (tools/release.mjs), which first attaches mac-build-input.tgz to
+# the release: the app files already obfuscated (the same ones the app ships), never the source.
+# Public repository: GitHub's macOS machines are free here.
+# (Source of truth: tools/public-repo/mac.yml in the private repository.)
+name: Mac
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag (v0.1.35)
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  mac:
+    runs-on: macos-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ inputs.tag }}
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - name: Files of this version
+        run: |
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p mac-build-input.tgz
+          tar -xzf mac-build-input.tgz
+          rm mac-build-input.tgz
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci
+      - name: App, Apple Silicon and Intel
+        run: npx electron-builder --mac dir --arm64 --x64 --publish never -c.directories.output=out
+      # no Apple certificate: an ad-hoc signature, without which Apple Silicon refuses to open it
+      - name: Ad-hoc signature
+        run: |
+          for app in out/mac*/*.app; do codesign --force --deep --sign - "$app"; codesign --verify --deep "$app"; done
+      - name: Disk images
+        run: |
+          npx electron-builder --mac dmg --arm64 --publish never -c.directories.output=out --prepackaged "$(ls -d out/mac-arm64/*.app)"
+          npx electron-builder --mac dmg --x64 --publish never -c.directories.output=out --prepackaged "$(ls -d out/mac/*.app)"
+          ls -la out
+      - name: Add to the release
+        run: |
+          gh release upload "$TAG" -R "$GITHUB_REPOSITORY" out/*.dmg --clobber
+          gh release delete-asset "$TAG" mac-build-input.tgz -R "$GITHUB_REPOSITORY" -y
